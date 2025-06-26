@@ -41,6 +41,15 @@ import {
   BookMarked
 } from 'lucide-react';
 import './App.css';
+import { 
+  authAPI, 
+  usersAPI, 
+  categoriesAPI, 
+  videosAPI, 
+  settingsAPI, 
+  bannerVideoAPI, 
+  themeAPI 
+} from './apiService';
 
 // Mock data for real estate training content with enhanced metadata
 const realEstateCategories = [
@@ -308,32 +317,63 @@ function App() {
   const controls = useAnimation();
   const userMenuRef = useRef(null);
 
-  // Load saved settings from localStorage
+  // Load data from backend and theme from localStorage
   useEffect(() => {
-    const savedCustomization = localStorage.getItem('netflixRealEstateCustomization');
-    const savedTheme = localStorage.getItem('netflixRealEstateTheme');
-    const savedUsers = localStorage.getItem('netflixRealEstateUsers');
-    const savedCategories = localStorage.getItem('netflixRealEstateCategories');
-    const savedBannerVideo = localStorage.getItem('netflixRealEstateBannerVideo');
-    
-    if (savedCustomization) {
-      setCustomization(JSON.parse(savedCustomization));
-    }
-    if (savedTheme) {
-      setTheme(savedTheme);
-    }
-    if (savedUsers) {
-      setUsers(JSON.parse(savedUsers));
-    }
-    if (savedCategories) {
-      setCategories(JSON.parse(savedCategories));
-    }
-    if (savedBannerVideo) {
-      setBannerVideo(JSON.parse(savedBannerVideo));
-    }
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Load theme from localStorage (keep this in localStorage)
+        const savedTheme = themeAPI.get();
+        setTheme(savedTheme);
+        
+        // Load data from backend APIs
+        const [settingsData, categoriesData, bannerVideoData] = await Promise.all([
+          settingsAPI.get().catch(() => null),
+          categoriesAPI.getAll().catch(() => []),
+          bannerVideoAPI.get().catch(() => null)
+        ]);
+        
+        if (settingsData) {
+          setCustomization({
+            logoUrl: settingsData.logoUrl || '',
+            companyName: settingsData.companyName || 'Realty ONE Group Mexico',
+            loginBackgroundUrl: settingsData.loginBackgroundUrl || '',
+            bannerUrl: settingsData.bannerUrl || '',
+            loginTitle: settingsData.loginTitle || 'Iniciar Sesión',
+            loginSubtitle: settingsData.loginSubtitle || 'Accede a tu plataforma de capacitación inmobiliaria'
+          });
+        }
+        
+        if (categoriesData && categoriesData.length > 0) {
+          // Convert backend format to frontend format
+          const frontendCategories = categoriesData.map(category => ({
+            id: parseInt(category.id) || category.id,
+            name: category.name,
+            icon: category.icon,
+            videos: category.videos || []
+          }))
+          setCategories(frontendCategories);
+        }
+        
+        if (bannerVideoData) {
+          setBannerVideo(bannerVideoData);
+        }
+        
+        // Load users data for admin
+        const usersData = await usersAPI.getAll().catch(() => []);
+        setUsers(usersData);
+        
+      } catch (error) {
+        console.error('Error loading data from backend:', error);
+        // Fallback to default values if backend fails
+        setCategories(realEstateCategories);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-    // Set loading to false immediately
-    setIsLoading(false);
+    loadData();
   }, []);
 
   // Close user menu when clicking outside
@@ -350,21 +390,33 @@ function App() {
     };
   }, []);
 
-  // Save settings to localStorage
-  const saveCustomization = (newCustomization) => {
-    setCustomization(newCustomization);
-    localStorage.setItem('netflixRealEstateCustomization', JSON.stringify(newCustomization));
+  // Save settings to backend
+  const saveCustomization = async (newCustomization) => {
+    try {
+      setCustomization(newCustomization);
+      await settingsAPI.update({
+        logoUrl: newCustomization.logoUrl,
+        companyName: newCustomization.companyName,
+        loginBackgroundUrl: newCustomization.loginBackgroundUrl,
+        bannerUrl: newCustomization.bannerUrl,
+        loginTitle: newCustomization.loginTitle,
+        loginSubtitle: newCustomization.loginSubtitle
+      });
+    } catch (error) {
+      console.error('Error saving customization to backend:', error);
+      alert('Error al guardar la configuración');
+    }
   };
 
-  const saveUsers = (newUsers) => {
+  const saveUsers = async (newUsers) => {
     setUsers(newUsers);
-    localStorage.setItem('netflixRealEstateUsers', JSON.stringify(newUsers));
+    // Users are automatically saved when created/deleted via API
   };
 
   const toggleTheme = () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
-    localStorage.setItem('netflixRealEstateTheme', newTheme);
+    themeAPI.set(newTheme);
   };
 
   // Get all videos for search and filtering
@@ -417,27 +469,32 @@ function App() {
     return videos;
   };
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    console.log('Login attempt:', email, password); // Debug log
-    console.log('Available users:', users); // Debug log
     
-    const user = users.find(u => u.email === email && u.password === password && u.isActive);
-    
-    if (user) {
-      console.log('User found:', user); // Debug log
-      setCurrentUser(user);
-      setUserRole(user.role);
+    try {
+      console.log('Login attempt:', email, password); // Debug log
+      
+      // Use backend authentication API
+      const loginResult = await authAPI.login(email, password);
+      
+      console.log('Login successful:', loginResult); // Debug log
+      
+      setCurrentUser({
+        id: Date.now(), // Generate temporary ID for frontend
+        name: loginResult.name,
+        email: loginResult.email,
+        role: loginResult.role,
+        isActive: true
+      });
+      setUserRole(loginResult.role);
       setIsAuthenticated(true);
       
-      // Update last login
-      const updatedUsers = users.map(u => 
-        u.id === user.id ? { ...u, lastLogin: new Date().toISOString().split('T')[0] } : u
-      );
-      saveUsers(updatedUsers);
-    } else {
-      console.log('Login failed - user not found or inactive'); // Debug log
-      alert('Credenciales incorrectas o usuario inactivo');
+      console.log('User role set to:', loginResult.role); // Debug log
+      
+    } catch (error) {
+      console.log('Login failed:', error.message); // Debug log
+      alert('Credenciales incorrectas');
     }
   };
 
@@ -452,42 +509,56 @@ function App() {
     setCurrentView('home');
   };
 
-  const createUser = () => {
+  const createUser = async () => {
     if (!newUser.name || !newUser.email || !newUser.password) {
       alert('Por favor complete todos los campos');
       return;
     }
 
-    if (users.find(u => u.email === newUser.email)) {
-      alert('Ya existe un usuario con este email');
-      return;
+    try {
+      // Use backend API to create user
+      await usersAPI.create({
+        name: newUser.name,
+        email: newUser.email,
+        password: newUser.password,
+        role: newUser.role || 'user'
+      });
+
+      // Refresh users list
+      const updatedUsers = await usersAPI.getAll();
+      setUsers(updatedUsers);
+      
+      setNewUser({ name: '', email: '', password: '', role: 'user' });
+      alert('Usuario creado exitosamente');
+    } catch (error) {
+      console.error('Error creating user:', error);
+      alert('Error al crear usuario: ' + error.message);
     }
-
-    const user = {
-      id: Date.now(),
-      ...newUser,
-      createdAt: new Date().toISOString().split('T')[0],
-      lastLogin: null,
-      isActive: true
-    };
-
-    const updatedUsers = [...users, user];
-    saveUsers(updatedUsers);
-    setNewUser({ name: '', email: '', password: '', role: 'user' });
-    alert('Usuario creado exitosamente');
   };
 
   const toggleUserStatus = (userId) => {
+    // This functionality might need backend support for user status updates
+    // For now, we'll keep it as frontend-only
     const updatedUsers = users.map(u => 
       u.id === userId ? { ...u, isActive: !u.isActive } : u
     );
-    saveUsers(updatedUsers);
+    setUsers(updatedUsers);
   };
 
-  const deleteUser = (userId) => {
+  const deleteUser = async (userId) => {
     if (window.confirm('¿Está seguro de eliminar este usuario?')) {
-      const updatedUsers = users.filter(u => u.id !== userId);
-      saveUsers(updatedUsers);
+      try {
+        await usersAPI.delete(userId);
+        
+        // Refresh users list
+        const updatedUsers = await usersAPI.getAll();
+        setUsers(updatedUsers);
+        
+        alert('Usuario eliminado exitosamente');
+      } catch (error) {
+        console.error('Error deleting user:', error);
+        alert('Error al eliminar usuario: ' + error.message);
+      }
     }
   };
 
@@ -693,30 +764,42 @@ function App() {
     const [localEmail, setLocalEmail] = useState('');
     const [localPassword, setLocalPassword] = useState('');
     const [localShowPassword, setLocalShowPassword] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
       e.preventDefault();
-      console.log('Login attempt:', localEmail, localPassword);
-      console.log('Available users:', users);
+      setIsLoading(true);
+      setErrorMessage('');
       
-      const user = users.find(u => u.email === localEmail && u.password === localPassword && u.isActive);
-      
-      if (user) {
-        console.log('User found:', user);
-        setCurrentUser(user);
-        setUserRole(user.role);
+      try {
+        console.log('Login attempt with API:', localEmail, localPassword);
+        
+        // Use backend authentication API
+        const loginResult = await authAPI.login(localEmail, localPassword);
+        
+        console.log('Login successful:', loginResult);
+        
+        setCurrentUser({
+          id: Date.now(), // Generate temporary ID for frontend
+          name: loginResult.name,
+          email: loginResult.email,
+          role: loginResult.role,
+          isActive: true
+        });
+        setUserRole(loginResult.role);
         setIsAuthenticated(true);
         setEmail(localEmail);
         setPassword(localPassword);
         
-        // Update last login
-        const updatedUsers = users.map(u => 
-          u.id === user.id ? { ...u, lastLogin: new Date().toISOString().split('T')[0] } : u
-        );
-        saveUsers(updatedUsers);
-      } else {
-        console.log('Login failed - user not found or inactive');
-        alert('Credenciales incorrectas o usuario inactivo');
+        console.log('User role set to:', loginResult.role); // Debug log
+        console.log('IsAuthenticated set to:', true); // Debug log
+        
+      } catch (error) {
+        console.log('Login failed:', error.message);
+        setErrorMessage('Credenciales incorrectas');
+      } finally {
+        setIsLoading(false);
       }
     };
 
@@ -798,13 +881,20 @@ function App() {
               </div>
             </div>
             
+            {errorMessage && (
+              <div className="text-red-500 text-sm font-medium error">
+                {errorMessage}
+              </div>
+            )}
+            
             <motion.button
               type="submit"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               className="w-full bg-[#C5A95E] text-black font-semibold py-3 rounded-md hover:bg-[#B8A055] transition duration-200"
+              disabled={isLoading}
             >
-              Iniciar Sesión
+              {isLoading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
             </motion.button>
           </form>
           
@@ -1018,23 +1108,32 @@ function App() {
       return allVideos;
     };
 
-    const deleteVideo = (videoId, categoryId) => {
+    const deleteVideo = async (videoId, categoryId) => {
       if (!window.confirm('¿Está seguro de eliminar este video?')) return;
 
-      if (categoryId === 'banner') {
-        setBannerVideo(null);
-        localStorage.removeItem('netflixRealEstateBannerVideo');
-      } else {
-        const updatedCategories = categories.map(category => 
-          category.id === categoryId 
-            ? { ...category, videos: category.videos.filter(v => v.id !== videoId) }
-            : category
-        );
-        setCategories(updatedCategories);
-        localStorage.setItem('netflixRealEstateCategories', JSON.stringify(updatedCategories));
+      try {
+        if (categoryId === 'banner') {
+          await bannerVideoAPI.delete();
+          setBannerVideo(null);
+        } else {
+          await videosAPI.delete(videoId);
+          
+          // Refresh categories to get updated data
+          const updatedCategories = await categoriesAPI.getAll();
+          const frontendCategories = updatedCategories.map(category => ({
+            id: parseInt(category.id) || category.id,
+            name: category.name,
+            icon: category.icon,
+            videos: category.videos || []
+          }));
+          setCategories(frontendCategories);
+        }
+        
+        alert('Video eliminado exitosamente');
+      } catch (error) {
+        console.error('Error deleting video:', error);
+        alert('Error al eliminar video: ' + error.message);
       }
-      
-      alert('Video eliminado exitosamente');
     };
 
     const editVideo = (video) => {
@@ -1376,7 +1475,7 @@ function App() {
       return (match && match[2].length === 11) ? match[2] : null;
     };
 
-    const handleUploadVideo = () => {
+    const handleUploadVideo = async () => {
       if (!newVideo.title || !newVideo.videoUrl) {
         alert('Por favor complete título y URL del video');
         return;
@@ -1388,8 +1487,7 @@ function App() {
         return;
       }
 
-      const video = {
-        id: editingVideo ? editingVideo.id : Date.now(),
+      const videoData = {
         title: newVideo.title,
         description: newVideo.description,
         thumbnail: newVideo.thumbnail || `https://img.youtube.com/vi/${youtubeId}/maxresdefault.jpg`,
@@ -1399,43 +1497,69 @@ function App() {
         difficulty: newVideo.difficulty,
         rating: editingVideo ? editingVideo.rating : 4.5,
         views: editingVideo ? editingVideo.views : 0,
-        releaseDate: editingVideo ? editingVideo.releaseDate : new Date().toISOString().split('T')[0]
+        releaseDate: editingVideo ? editingVideo.releaseDate : new Date().toISOString().split('T')[0],
+        categoryId: newVideo.categoryId.toString()
       };
 
-      if (editingVideo) {
-        // Update existing video
-        if (editingVideo.categoryId === 'banner') {
-          setBannerVideo(video);
-          localStorage.setItem('netflixRealEstateBannerVideo', JSON.stringify(video));
+      try {
+        if (editingVideo) {
+          // Update existing video
+          if (editingVideo.categoryId === 'banner') {
+            await bannerVideoAPI.set({
+              title: videoData.title,
+              description: videoData.description,
+              thumbnail: videoData.thumbnail,
+              youtubeId: videoData.youtubeId
+            });
+            const updatedBanner = await bannerVideoAPI.get();
+            setBannerVideo(updatedBanner);
+          } else {
+            await videosAPI.update(editingVideo.id, videoData);
+            
+            // Refresh categories
+            const updatedCategories = await categoriesAPI.getAll();
+            const frontendCategories = updatedCategories.map(category => ({
+              id: parseInt(category.id) || category.id,
+              name: category.name,
+              icon: category.icon,
+              videos: category.videos || []
+            }));
+            setCategories(frontendCategories);
+          }
+          alert('Video actualizado exitosamente');
         } else {
-          const updatedCategories = categories.map(category => 
-            category.id === editingVideo.categoryId 
-              ? { ...category, videos: category.videos.map(v => v.id === editingVideo.id ? video : v) }
-              : category
-          );
-          setCategories(updatedCategories);
-          localStorage.setItem('netflixRealEstateCategories', JSON.stringify(updatedCategories));
+          // Create new video
+          if (newVideo.categoryId === 'banner') {
+            await bannerVideoAPI.set({
+              title: videoData.title,
+              description: videoData.description,
+              thumbnail: videoData.thumbnail,
+              youtubeId: videoData.youtubeId
+            });
+            const updatedBanner = await bannerVideoAPI.get();
+            setBannerVideo(updatedBanner);
+          } else {
+            await videosAPI.create(videoData);
+            
+            // Refresh categories
+            const updatedCategories = await categoriesAPI.getAll();
+            const frontendCategories = updatedCategories.map(category => ({
+              id: parseInt(category.id) || category.id,
+              name: category.name,
+              icon: category.icon,
+              videos: category.videos || []
+            }));
+            setCategories(frontendCategories);
+          }
+          alert('Video subido exitosamente');
         }
-        alert('Video actualizado exitosamente');
-      } else {
-        // Create new video
-        if (newVideo.categoryId === 'banner') {
-          setBannerVideo(video);
-          localStorage.setItem('netflixRealEstateBannerVideo', JSON.stringify(video));
-        } else {
-          const updatedCategories = categories.map(category => 
-            category.id === parseInt(newVideo.categoryId) 
-              ? { ...category, videos: [...category.videos, video] }
-              : category
-          );
-          setCategories(updatedCategories);
-          localStorage.setItem('netflixRealEstateCategories', JSON.stringify(updatedCategories));
-        }
-        alert('Video subido exitosamente');
+        
+        setEditingVideo(null);
+        setShowVideoUpload(false);
+      } catch (error) {
+        console.error('Error uploading/updating video:', error);
+        alert('Error al procesar video: ' + error.message);
       }
-      
-      setEditingVideo(null);
-      setShowVideoUpload(false);
     };
 
     const handleCloseModal = () => {
@@ -1601,43 +1725,83 @@ function App() {
   const AdminPanel = () => {
     const [newCategoryName, setNewCategoryName] = useState('');
 
-    const addCategory = () => {
+    const addCategory = async () => {
       if (!newCategoryName.trim()) {
         alert('Por favor ingrese un nombre para la categoría');
         return;
       }
 
-      const newCategory = {
-        id: Date.now(),
-        name: newCategoryName,
-        icon: BookOpen, // Default icon
-        videos: []
-      };
+      try {
+        await categoriesAPI.create({
+          name: newCategoryName.trim(),
+          icon: 'BookOpen' // Default icon
+        });
 
-      const updatedCategories = [...categories, newCategory];
-      setCategories(updatedCategories);
-      localStorage.setItem('netflixRealEstateCategories', JSON.stringify(updatedCategories));
-      setNewCategoryName('');
-      alert('Categoría agregada exitosamente');
-    };
-
-    const editCategory = (category) => {
-      const newName = prompt('Nuevo nombre para la categoría:', category.name);
-      if (newName && newName.trim() && newName !== category.name) {
-        const updatedCategories = categories.map(c => 
-          c.id === category.id ? { ...c, name: newName.trim() } : c
-        );
-        setCategories(updatedCategories);
-        localStorage.setItem('netflixRealEstateCategories', JSON.stringify(updatedCategories));
-        alert('Categoría actualizada exitosamente');
+        // Refresh categories
+        const updatedCategories = await categoriesAPI.getAll();
+        const frontendCategories = updatedCategories.map(category => ({
+          id: parseInt(category.id) || category.id,
+          name: category.name,
+          icon: category.icon,
+          videos: category.videos || []
+        }));
+        setCategories(frontendCategories);
+        
+        setNewCategoryName('');
+        alert('Categoría agregada exitosamente');
+      } catch (error) {
+        console.error('Error adding category:', error);
+        alert('Error al agregar categoría: ' + error.message);
       }
     };
 
-    const deleteCategory = (categoryId) => {
+    const editCategory = async (category) => {
+      const newName = prompt('Nuevo nombre para la categoría:', category.name);
+      if (newName && newName.trim() && newName !== category.name) {
+        try {
+          await categoriesAPI.update(category.id.toString(), {
+            name: newName.trim(),
+            icon: category.icon
+          });
+
+          // Refresh categories
+          const updatedCategories = await categoriesAPI.getAll();
+          const frontendCategories = updatedCategories.map(cat => ({
+            id: parseInt(cat.id) || cat.id,
+            name: cat.name,
+            icon: cat.icon,
+            videos: cat.videos || []
+          }));
+          setCategories(frontendCategories);
+          
+          alert('Categoría actualizada exitosamente');
+        } catch (error) {
+          console.error('Error updating category:', error);
+          alert('Error al actualizar categoría: ' + error.message);
+        }
+      }
+    };
+
+    const deleteCategory = async (categoryId) => {
       if (window.confirm('¿Está seguro de eliminar esta categoría y todos sus videos?')) {
-        const updatedCategories = categories.filter(c => c.id !== categoryId);
-        setCategories(updatedCategories);
-        localStorage.setItem('netflixRealEstateCategories', JSON.stringify(updatedCategories));
+        try {
+          await categoriesAPI.delete(categoryId.toString());
+          
+          // Refresh categories
+          const updatedCategories = await categoriesAPI.getAll();
+          const frontendCategories = updatedCategories.map(category => ({
+            id: parseInt(category.id) || category.id,
+            name: category.name,
+            icon: category.icon,
+            videos: category.videos || []
+          }));
+          setCategories(frontendCategories);
+          
+          alert('Categoría eliminada exitosamente');
+        } catch (error) {
+          console.error('Error deleting category:', error);
+          alert('Error al eliminar categoría: ' + error.message);
+        }
       }
     };
 

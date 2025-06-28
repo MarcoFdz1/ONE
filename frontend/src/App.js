@@ -1,3 +1,4 @@
+console.log('API base URL:', process.env.REACT_APP_BACKEND_URL);
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, stagger, useAnimation } from 'framer-motion';
 import { useInView } from 'react-intersection-observer';

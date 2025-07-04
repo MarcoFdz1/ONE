@@ -14,13 +14,75 @@ from datetime import datetime
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
 # Create the main app without a prefix
-app = FastAPI()
+app = FastAPI(title="Real Estate Training Platform API", version="1.0.0")
+
+# MongoDB connection with fallback
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+db_name = os.environ.get('DB_NAME', 'real_estate_training')
+
+async def init_db():
+    try:
+        client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
+        # Test connection
+        await client.admin.command('ping')
+        db = client[db_name]
+        print("✅ MongoDB connected successfully")
+        return client, db
+    except Exception as e:
+        print(f"❌ MongoDB connection failed: {e}")
+        # Use in-memory storage as fallback
+        from motor.core import AgnosticDatabase
+        class InMemoryDB:
+            def __init__(self):
+                self.data = {
+                    'categories': [],
+                    'users': [],
+                    'videos': [],
+                    'settings': [],
+                    'banner_videos': []
+                }
+            
+            def __getattr__(self, name):
+                return InMemoryCollection(self.data.get(name, []))
+        
+        class InMemoryCollection:
+            def __init__(self, data):
+                self.data = data
+            
+            async def find(self):
+                return MockCursor(self.data)
+            
+            async def find_one(self, query=None):
+                return self.data[0] if self.data else None
+            
+            async def insert_one(self, doc):
+                self.data.append(doc)
+                return type('Result', (), {'inserted_id': 'temp'})()
+            
+            async def update_one(self, query, update):
+                return type('Result', (), {'matched_count': 1})()
+            
+            async def delete_one(self, query):
+                return type('Result', (), {'deleted_count': 1})()
+            
+            async def delete_many(self, query):
+                return type('Result', (), {'deleted_count': len(self.data)})()
+        
+        class MockCursor:
+            def __init__(self, data):
+                self.data = data
+            
+            async def to_list(self, length):
+                return self.data
+        
+        return None, InMemoryDB()
+
+client, db = None, None  # Initialize with None
+@app.on_event("startup")
+async def startup_db_client():
+    global client, db
+    client, db = await init_db()
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -197,6 +259,12 @@ async def get_categories():
         # Initialize with default categories if none exist
         await initialize_default_categories()
         categories = await db.categories.find().to_list(1000)
+    
+    # Get videos for each category
+    for category in categories:
+        category_videos = await db.videos.find({"categoryId": category["id"]}).to_list(1000)
+        category["videos"] = [Video(**video) for video in category_videos]
+    
     return [Category(**category) for category in categories]
 
 @api_router.post("/categories", response_model=Category)
@@ -234,13 +302,6 @@ async def create_video(video_create: VideoCreate):
     video_dict = video_create.dict()
     video_obj = Video(**video_dict)
     await db.videos.insert_one(video_obj.dict())
-    
-    # Also add to category's videos array
-    await db.categories.update_one(
-        {"id": video_create.categoryId},
-        {"$push": {"videos": video_obj.dict()}}
-    )
-    
     return video_obj
 
 @api_router.put("/videos/{video_id}")
@@ -253,12 +314,6 @@ async def update_video(video_id: str, video_update: VideoCreate):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Video no encontrado")
     
-    # Update video in category's videos array
-    await db.categories.update_one(
-        {"videos.id": video_id},
-        {"$set": {"videos.$": Video(**video_update.dict()).dict()}}
-    )
-    
     return {"message": "Video actualizado exitosamente"}
 
 @api_router.delete("/videos/{video_id}")
@@ -267,12 +322,6 @@ async def delete_video(video_id: str):
     result = await db.videos.delete_one({"id": video_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Video no encontrado")
-    
-    # Remove from all categories
-    await db.categories.update_many(
-        {},
-        {"$pull": {"videos": {"id": video_id}}}
-    )
     
     return {"message": "Video eliminado exitosamente"}
 

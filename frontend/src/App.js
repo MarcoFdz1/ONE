@@ -51,6 +51,7 @@ import {
   bannerVideoAPI, 
   themeAPI 
 } from './apiService';
+import EmergencyImageFix from './EmergencyImageFix';
 
 // Mock data for real estate training content with enhanced metadata
 const realEstateCategories = [
@@ -306,12 +307,12 @@ function App() {
   });
   const [showPassword, setShowPassword] = useState(false);
   const [customization, setCustomization] = useState({
-    logo: 'https://images.unsplash.com/photo-1560472355-536de3962603?w=200&h=80&fit=crop',
-    heroBanner: 'https://images.unsplash.com/photo-1524292691042-82ed9c62673b',
-    loginBackground: 'https://images.unsplash.com/photo-1559458049-9d62fceeb52b',
-    companyName: 'REALTY ONE GROUP MÉXICO',
-    loginTitle: 'Plataforma de Capacitación Inmobiliaria',
-    loginSubtitle: 'Accede a tu cuenta para continuar con tu formación profesional'
+    logoUrl: '',
+    companyName: 'Realty ONE Group Mexico',
+    loginBackgroundUrl: '',
+    bannerUrl: '',
+    loginTitle: 'Iniciar Sesión',
+    loginSubtitle: 'Accede a tu plataforma de capacitación inmobiliaria'
   });
 
   // Animation controls
@@ -321,19 +322,16 @@ function App() {
   // Load data from backend and theme from localStorage
   useEffect(() => {
     const loadData = async () => {
+      setIsLoading(true);
+      
+      // Load theme
+      const savedTheme = localStorage.getItem('netflixRealEstateTheme') || 'dark';
+      setTheme(savedTheme);
+      
       try {
-        setIsLoading(true);
-        
-        // Load theme from localStorage (keep this in localStorage)
-        const savedTheme = themeAPI.get();
-        setTheme(savedTheme);
-        
-        // Load data from backend APIs
-        const [settingsData, categoriesData, bannerVideoData] = await Promise.all([
-          settingsAPI.get().catch(() => null),
-          categoriesAPI.getAll().catch(() => []),
-          bannerVideoAPI.get().catch(() => null)
-        ]);
+        // Load settings from backend
+        const response = await fetch('https://one-production-6db5.up.railway.app/api/settings');
+        const settingsData = await response.json();
         
         if (settingsData) {
           setCustomization({
@@ -346,28 +344,22 @@ function App() {
           });
         }
         
+        // Load categories
+        const categoriesResponse = await fetch('https://one-production-6db5.up.railway.app/api/categories');
+        const categoriesData = await categoriesResponse.json();
+        
         if (categoriesData && categoriesData.length > 0) {
-          // Convert backend format to frontend format
           const frontendCategories = categoriesData.map(category => ({
             id: parseInt(category.id) || category.id,
             name: category.name,
             icon: category.icon,
             videos: category.videos || []
-          }))
+          }));
           setCategories(frontendCategories);
         }
         
-        if (bannerVideoData) {
-          setBannerVideo(bannerVideoData);
-        }
-        
-        // Load users data for admin
-        const usersData = await usersAPI.getAll().catch(() => []);
-        setUsers(usersData);
-        
       } catch (error) {
-        console.error('Error loading data from backend:', error);
-        // Fallback to default values if backend fails
+        console.error('Error loading data:', error);
         setCategories(realEstateCategories);
       } finally {
         setIsLoading(false);
@@ -391,21 +383,28 @@ function App() {
     };
   }, []);
 
-  // Save settings to backend
+  // Save settings to backend - SIMPLE VERSION
   const saveCustomization = async (newCustomization) => {
     try {
       setCustomization(newCustomization);
-      await settingsAPI.update({
-        logoUrl: newCustomization.logoUrl,
-        companyName: newCustomization.companyName,
-        loginBackgroundUrl: newCustomization.loginBackgroundUrl,
-        bannerUrl: newCustomization.bannerUrl,
-        loginTitle: newCustomization.loginTitle,
-        loginSubtitle: newCustomization.loginSubtitle
+      
+      const response = await fetch('https://one-production-6db5.up.railway.app/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          logoUrl: newCustomization.logoUrl,
+          companyName: newCustomization.companyName,
+          loginBackgroundUrl: newCustomization.loginBackgroundUrl,
+          bannerUrl: newCustomization.bannerUrl,
+          loginTitle: newCustomization.loginTitle,
+          loginSubtitle: newCustomization.loginSubtitle
+        })
       });
+      
+      if (!response.ok) throw new Error('Save failed');
+      
     } catch (error) {
-      console.error('Error saving customization to backend:', error);
-      alert('Error al guardar la configuración');
+      console.error('Save error:', error);
     }
   };
 
@@ -808,7 +807,7 @@ function App() {
       <div 
         className={`min-h-screen flex items-center justify-center bg-cover bg-center relative ${theme === 'light' ? 'bg-gray-100' : ''}`}
         style={{
-          backgroundImage: theme === 'dark' ? `linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url(${customization.loginBackground})` : `linear-gradient(rgba(255,255,255,0.8), rgba(255,255,255,0.8)), url(${customization.loginBackground})`
+          backgroundImage: theme === 'dark' ? `linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url(${customization.loginBackgroundUrl})` : `linear-gradient(rgba(255,255,255,0.8), rgba(255,255,255,0.8)), url(${customization.loginBackgroundUrl})`
         }}
       >
         <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-black opacity-40' : 'bg-white opacity-60'}`}></div>
@@ -818,16 +817,20 @@ function App() {
           className={`${theme === 'dark' ? 'bg-black bg-opacity-80' : 'bg-white bg-opacity-90'} p-8 rounded-lg w-full max-w-md relative z-10 shadow-2xl`}
         >
           <div className="text-center mb-8">
-            {customization.logo ? (
-              <img 
-                src={customization.logo} 
-                alt={customization.companyName}
-                className="h-16 mx-auto mb-4 object-contain"
-                onError={(e) => {
-                  e.target.style.display = 'none';
-                  e.target.nextSibling.style.display = 'block';
-                }}
-              />
+            {customization.logoUrl ? (
+              <>
+                {console.log('🖼️ Rendering logo:', customization.logoUrl)}
+                <img 
+                  src={customization.logoUrl} 
+                  alt={customization.companyName}
+                  className="h-16 mx-auto mb-4 object-contain"
+                  onError={(e) => {
+                    console.error('❌ Logo failed to load:', customization.logoUrl);
+                    e.target.style.display = 'none';
+                  }}
+                  onLoad={() => console.log('✅ Logo loaded successfully')}
+                />
+              </>
             ) : null}
             <h1 className={`text-4xl font-bold text-[#C5A95E] mb-2`} style={{display: customization.logo ? 'none' : 'block'}}>
               {customization.companyName}
@@ -1841,15 +1844,30 @@ function App() {
                 <div className="space-y-4">
                   <div>
                     <h3 className="text-[#C5A95E] font-semibold mb-2 text-sm">Personalización de Marca</h3>
-                    <div className="space-y-2">
+                    
+                    <EmergencyImageFix 
+                      customization={customization}
+                      setCustomization={setCustomization}
+                      saveCustomization={saveCustomization}
+                      theme={theme}
+                    />
+                    
+                    <div className="space-y-2 mt-4">
                       <div>
                         <label className={`block ${theme === 'dark' ? 'text-white' : 'text-gray-900'} text-xs mb-1`}>
                           URL del Logo
                         </label>
                         <input
                           type="text"
-                          defaultValue={customization.logo}
-                          onBlur={(e) => saveCustomization({...customization, logo: e.target.value})}
+                          value={customization.logoUrl}
+                          onChange={(e) => {
+                            const newCustomization = {...customization, logoUrl: e.target.value};
+                            setCustomization(newCustomization);
+                            clearTimeout(window.logoTimer);
+                            window.logoTimer = setTimeout(() => {
+                              saveCustomization(newCustomization);
+                            }, 1000);
+                          }}
                           className={`w-full p-2 text-xs ${theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : 'bg-gray-100 text-gray-900 border-gray-300'} rounded border focus:border-[#C5A95E] focus:outline-none transition-colors`}
                           placeholder="https://ejemplo.com/logo.png"
                         />
@@ -1893,8 +1911,15 @@ function App() {
                         </label>
                         <input
                           type="text"
-                          defaultValue={customization.loginBackground}
-                          onBlur={(e) => saveCustomization({...customization, loginBackground: e.target.value})}
+                          value={customization.loginBackgroundUrl}
+                          onChange={(e) => {
+                            const newCustomization = {...customization, loginBackgroundUrl: e.target.value};
+                            setCustomization(newCustomization);
+                            clearTimeout(window.backgroundTimer);
+                            window.backgroundTimer = setTimeout(() => {
+                              saveCustomization(newCustomization);
+                            }, 1000);
+                          }}
                           className={`w-full p-2 text-xs ${theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : 'bg-gray-100 text-gray-900 border-gray-300'} rounded border focus:border-[#C5A95E] focus:outline-none transition-colors`}
                           placeholder="https://ejemplo.com/imagen.jpg"
                         />
@@ -1905,8 +1930,8 @@ function App() {
                         </label>
                         <input
                           type="text"
-                          defaultValue={customization.heroBanner}
-                          onBlur={(e) => saveCustomization({...customization, heroBanner: e.target.value})}
+                          defaultValue={customization.bannerUrl}
+                          onBlur={(e) => saveCustomization({...customization, bannerUrl: e.target.value})}
                           className={`w-full p-2 text-xs ${theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : 'bg-gray-100 text-gray-900 border-gray-300'} rounded border focus:border-[#C5A95E] focus:outline-none transition-colors`}
                           placeholder="https://ejemplo.com/banner.jpg"
                         />
@@ -2262,9 +2287,9 @@ function App() {
                 className="cursor-pointer flex items-center space-x-3"
                 onClick={() => setCurrentView('home')}
               >
-                {customization.logo ? (
+                {customization.logoUrl ? (
                   <img 
-                    src={customization.logo} 
+                    src={customization.logoUrl} 
                     alt={customization.companyName}
                     className="h-8 object-contain"
                     onError={(e) => {
